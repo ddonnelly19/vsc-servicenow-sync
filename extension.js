@@ -8,6 +8,8 @@ const jsdiff = require('diff');
 const glob = require('glob');
 const opn = require('opn');
 
+request.debug = true;
+
 var ServiceNowSync = (function () {
     function ServiceNowSync() {
         let subscriptions = [];
@@ -41,37 +43,41 @@ var ServiceNowSync = (function () {
         event.waitUntil(readFilePromise);
 
         readFilePromise.then(function () {
-            if (_this.isSynced()) {
-                let fileName = path.basename(doc.fileName);
-                let fileFolder = path.dirname(doc.fileName);
-                let folderSettings = _this.readSettings(fileFolder);
-                let sys_id = folderSettings.files[fileName];
+            try {
+                if (_this.isSynced()) {
+                    let fileName = path.basename(doc.fileName);
+                    let fileFolder = path.dirname(doc.fileName);
+                    let folderSettings = _this.readSettings(fileFolder);
+                    let sys_id = folderSettings.files[fileName];
 
-                if (typeof sys_id !== 'undefined') {
-                    _this.getRecord(folderSettings, sys_id, (record) => {
-                        if (record) {
-                            let diff = jsdiff.diffChars(prevDoc.toString(), record[folderSettings.field]);
+                    if (typeof sys_id !== 'undefined') {
+                        _this.getRecord(folderSettings, sys_id, (record) => {
+                            if (record) {
+                                let diff = jsdiff.diffChars(prevDoc.toString(), record[folderSettings.field]);
 
-                            if (diff.length > 1 || diff[0].added || diff[0].removed) {
-                                // Please note this is a variadic function
-                                vscode.window.showInformationMessage('Remote record has been updated, overwrite?', 'Yes', 'No').then(function (res) {
-                                    if (res === 'Yes') {
-                                        _this.updateRecord(folderSettings, sys_id, doc.getText(), () => {
-                                            vscode.window.setStatusBarMessage('✔️ File Uploaded', 2000);
-                                        });
-                                    } else {
-                                        vscode.window.setStatusBarMessage('❌️ File Not Uploaded', 2000);
-                                    }
-                                });
-                            } else {
-                                _this.updateRecord(folderSettings, sys_id, doc.getText(), () => {
-                                    vscode.window.setStatusBarMessage('✔️ File Uploaded', 2000);
-                                });
+                                if (diff.length > 1 || diff[0].added || diff[0].removed) {
+                                    // Please note this is a variadic function
+                                    vscode.window.showInformationMessage('Remote record has been updated, overwrite?', 'Yes', 'No').then(function (res) {
+                                        if (res === 'Yes') {
+                                            _this.updateRecord(folderSettings, sys_id, doc.getText(), () => {
+                                                vscode.window.setStatusBarMessage('✔️ File Uploaded', 2000);
+                                            });
+                                        } else {
+                                            vscode.window.setStatusBarMessage('❌️ File Not Uploaded', 2000);
+                                        }
+                                    });
+                                } else {
+                                    _this.updateRecord(folderSettings, sys_id, doc.getText(), () => {
+                                        vscode.window.setStatusBarMessage('✔️ File Uploaded', 2000);
+                                    });
 
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
                 }
+            } catch (ex) {
+                vscode.window.showErrorMessage(ex);
             }
         });
     }
@@ -194,12 +200,17 @@ var ServiceNowSync = (function () {
             return key
         });
 
-        vscode.window.showQuickPick(quickPickOptions).then((table) => {
+        quickPickOptions.forEach(table => {
+            if (tableFieldList[table].length === 1) _this.createSingleFolder(table);
+            if (tableFieldList[table].length > 1) _this.createMultiFolder(table);
+        });
+
+        /*vscode.window.showQuickPick(quickPickOptions).then((table) => {
             if (typeof tableFieldList[table] !== 'undefined') {
                 if (tableFieldList[table].length === 1) _this.createSingleFolder(table);
                 if (tableFieldList[table].length > 1) _this.createMultiFolder(table);
             }
-        });
+        });*/
     }
 
     ServiceNowSync.prototype.pullMultipleFiles = function (selectedFolder) {
@@ -207,6 +218,7 @@ var ServiceNowSync = (function () {
 
         let queryPromptOptions = {
             "prompt": "Enter your encoded query",
+            "value": "active=true",
             "validateInput": (val) => {
                 if (val == '') return 'Please enter a valid value.';
                 return null;
@@ -283,25 +295,34 @@ var ServiceNowSync = (function () {
         }
 
         function createFile(record) {
-            if (typeof settings.multi !== 'undefined' && settings.multi === true) {
-                _.each(subSettings, (setting) => {
-                    let fileName = record[setting.display] + '.' + setting.extension;
-                    let filePath = path.resolve(setting.folder, fileName);
-                    fs.writeFileSync(filePath, record[setting.field]);
+            try {
+                if (typeof settings.multi !== 'undefined' && settings.multi === true) {
+                    _.each(subSettings, (setting) => {
+                        if (record[setting.field] !== 'undefined' && record[setting.field].length > 0) {
+                            let fileName = record[setting.display] + '.' + setting.extension;
+                            fileName = fileName.replace("\\", "_");
+                            let filePath = path.resolve(setting.folder, fileName);
+                            fs.writeFileSync(filePath, record[setting.field]);
 
-                    setting.files[fileName] = record.sys_id;
-                    _this.writeSettings(setting.folder, setting);
-                });
-            } else {
-                let fileName = record[settings.display] + '.' + settings.extension;
-                let filePath = path.resolve(folder, fileName);
-                fs.writeFileSync(filePath, record[settings.field]);
+                            setting.files[fileName] = record.sys_id;
+                            _this.writeSettings(setting.folder, setting);
+                        }
+                    });
+                } else {
+                    if (record[settings.field] !== 'undefined' && record[settings.field].length > 0) {
+                        let fileName = record[settings.display] + '.' + settings.extension;
+                        fileName = fileName.replace("\\", "_");
+                        let filePath = path.resolve(folder, fileName);
+                        fs.writeFileSync(filePath, record[settings.field]);
 
-                settings.files[fileName] = record.sys_id;
-                _this.writeSettings(folder, settings);
+                        settings.files[fileName] = record.sys_id;
+                        _this.writeSettings(folder, settings);
+                    }
+                }
+            } catch (ex) {
+                vscode.window.showErrorMessage(ex);
             }
         }
-
 
         function recordListToQuickPickItems(obj) {
             return {
@@ -318,12 +339,13 @@ var ServiceNowSync = (function () {
         return {
             "method": "GET",
             "url": rootSettings.instance + '/api/now/table/' + table,
-            "headers": {
-                "Authorization": rootSettings.auth
-            }
-
+            "auth": {
+                "username": rootSettings.username,
+                "password": rootSettings.password,
+                "sendImmediately": rootSettings.sendImmediately
+            },
+            "jar": true
         }
-
     };
 
     ServiceNowSync.prototype.openRecordInBrowser = function () {
@@ -368,6 +390,7 @@ var ServiceNowSync = (function () {
         let _this = this;
         let options = _this.createRequest(table)
 
+
         options.qs = {
             "sysparm_fields": fields,
             "sysparm_query": (typeof query !== 'undefined') ? query : ''
@@ -379,23 +402,32 @@ var ServiceNowSync = (function () {
 
     ServiceNowSync.prototype.executeRequest = function (options, cb) {
         vscode.window.setStatusBarMessage('⏳ Querying ServiceNow...', 2000);
+
         request(options, parseResults);
 
         function parseResults(error, response, body) {
-            vscode.window.setStatusBarMessage('', 0);
+            console.log('Options: ' + JSON.stringify(options));
+            console.log('Response: ' + JSON.stringify(response));
             if (!error && response.statusCode == 200) {
                 let results = body;
                 if (typeof body !== 'object') {
-                    results = JSON.parse(body);
+                    try {
+                        results = JSON.parse(body);
+                    } catch (ex) {
+                        vscode.window.showErrorMessage("error parsing results: " + body);
+                    }
                 }
 
                 if (typeof results.result !== 'undefined') {
                     results = results.result;
                 }
-
+                console.log("results: " + results);
                 cb(results);
             } else {
-                vscode.window.showErrorMessage('Error 0161:' + error);
+                vscode.window.showErrorMessage('Error: ' + response.statusCode + ": " + error);
+                //vscode.window.showErrorMessage('Options: ' + JSON.stringify(options));
+                //vscode.window.showErrorMessage('Response: ' + JSON.stringify(response));
+                console.error(response);
             }
 
             cb(null);
